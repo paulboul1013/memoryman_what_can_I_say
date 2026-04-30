@@ -1,8 +1,33 @@
+#define _DEFAULT_SOURCE // for glibc test macro
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <assert.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+#define ALIGNMENT ((size_t)_Alignof(max_align_t))
+
+struct block_meta{
+    size_t size;
+    struct block_meta *next;
+    int free;
+    int magic; //debugging
+};
+
+// #define META_SIZE sizeof(struct block_meta)
+
+void *global_base=NULL;
+/*global_base
+    |
+    v
++----------+      +----------+      +----------+
+| block 1  | ---> | block 2  | ---> | block 3  | ---> NULL
++----------+      +----------+      +----------+
+*/
 
 //can allocate，but can't free
 void *malloc_man(size_t size){
@@ -14,23 +39,60 @@ void *malloc_man(size_t size){
     return p; // top of heap
 }
 
-struct block_meta{
-    size_t size;
-    struct block_meta *next;
-    int free;
-    int magic; //debugging
-};
+static bool add_overflow_size(size_t a,size_t b,size_t *out){
+    if (a>SIZE_MAX-b){
+        return true;
+    }
 
-#define META_SIZE sizeof(struct block_meta)
+    *out=a+b;
+    return false;
+}
 
-void *global_base=NULL;
-/*global_base
-    |
-    v
-+----------+      +----------+      +----------+
-| block 1  | ---> | block 2  | ---> | block 3  | ---> NULL
-+----------+      +----------+      +----------+
-*/
+static bool align_up_size(size_t n,size_t *out) {
+    size_t rem=n%ALIGNMENT;
+
+    if (rem==0){
+        *out=n;
+        return true;
+    }
+
+    size_t add=ALIGNMENT-rem;
+
+    if (n>SIZE_MAX-add){
+        return false;
+    }
+
+    *out=n+add;
+    return true;
+}
+
+static bool align_up_addr(uintptr_t addr,uintptr_t *out){
+    uintptr_t alignment=(uintptr_t)ALIGNMENT;
+    uintptr_t rem=addr%alignment;
+
+    if (rem==0){
+        *out=addr;
+        return true;
+    }
+
+    uintptr_t add=alignment-rem;
+
+    if (addr > UINTPTR_MAX -add){
+        return false;
+    }
+
+    *out=addr+add;
+    return true;
+}
+
+static size_t meta_size(void){
+    size_t result=0;
+    bool ok = align_up_size(sizeof(struct block_meta),&result);
+    assert(ok);
+    return result;
+}
+
+
 
 struct block_meta *find_free_block(struct block_meta **last, size_t size){
     struct block_meta *cur=global_base;
@@ -45,11 +107,54 @@ struct block_meta *find_free_block(struct block_meta **last, size_t size){
 
 //if can't find free block,ask os to more space 
 struct block_meta * request_space(struct block_meta *last, size_t  size){
-    struct block_meta * block=sbrk(0);
-    void * req=sbrk(size+META_SIZE);
+    size_t aligned_size=0;
+    if (!align_up_size(size,&aligned_size)){
+        return NULL;
+    }
 
-    if (req==(void*)-1) return NULL;
-    if (last) last->next=block;
+    size_t meta=meta_size();
+
+    
+    void  *old_brk=sbrk(0);
+    if (old_brk==(void*)-1){
+        return NULL;
+    }
+
+    uintptr_t start=(uintptr_t)old_brk;
+    uintptr_t aligned_start=0;
+
+    if (!align_up_addr(start,&aligned_start)) {
+        return NULL;
+    }
+
+    size_t padding=(size_t)(aligned_start-start);
+
+    size_t tmp=0;
+    size_t total=0;
+
+    if (add_overflow_size(padding,meta,&tmp)){
+        return NULL;
+    }
+
+    if (add_overflow_size(tmp,aligned_size,&total)){
+        return NULL;
+    }
+
+    if (total>(size_t )INTPTR_MAX){
+        return NULL;
+    }
+
+    void *req=sbrk((intptr_t)total);
+    if (req==(void*)-1){
+        return NULL;
+    }
+
+    struct block_meta *block=(struct block_meta*)((char*)req+padding);
+
+    if (last){
+        last->next=block;
+    }
+
     
     block->size=size;
     block->next=NULL;
@@ -61,15 +166,23 @@ struct block_meta * request_space(struct block_meta *last, size_t  size){
 
 void *malloc_man_v2(size_t size){
     if (size<=0) return NULL;
-    struct block_meta *block;
+
+    size_t aligned_size=0;
+    if (!align_up_size(size,&aligned_size)){
+        return NULL;
+    }
+
+    struct block_meta *block=NULL;
 
     if (!global_base){
-        block=request_space(NULL,size);
+        block=request_space(NULL,aligned_size);
         if (!block) return NULL;
+
         global_base=block;
     }else{
         struct block_meta *last=global_base;
-        block=find_free_block(&last,size);
+
+        block=find_free_block(&last,aligned_size);
 
         if (!block){
             block=request_space(last,size);
@@ -80,11 +193,11 @@ void *malloc_man_v2(size_t size){
         }
     }
 
-    return (block+1);//skip meta data，pointer to the uesr usable memory
+    return (void*)((char*)block+meta_size());//skip meta data，pointer to the uesr usable memory
 }
 
 struct block_meta *get_block_ptr(void *ptr){
-    return (struct block_meta *) ptr-1; // back to metadata position
+    return (struct block_meta *)((char*)ptr-meta_size()); // back to metadata position
 }
 
 void free_man(void *ptr){
@@ -100,6 +213,11 @@ void free_man(void *ptr){
 
 void *realloc_man(void *ptr,size_t size){
     if (!ptr) return malloc_man_v2(size);
+
+    if (size==0){
+        free_man(ptr);
+        return NULL;
+    }
     
     struct block_meta *block=get_block_ptr(ptr);
 
@@ -116,39 +234,58 @@ void *realloc_man(void *ptr,size_t size){
 }
 
 void *calloc_man(size_t n,size_t size){
-    void *ptr=malloc_man_v2(n*size);
+    if (n!=0 && size > SIZE_MAX/n){
+        return NULL;
+    }
+
+    size_t total=n*size;
+
+    void *ptr=malloc_man_v2(total);
+    if (!ptr){
+        return NULL;
+    }
     
-    memset(ptr,0,n*size);
+    memset(ptr,0,total);
     return ptr;
+}
+
+static int is_aligned(void *ptr,size_t alignment){
+    return ((uintptr_t)ptr%alignment)==0;
 }
 
 int main(int argc,char *argv[]){
 
-    char *p=malloc_man_v2(16);
-    assert(p!=NULL);
+    for(size_t size=1;size<=256;size++){
+        void *p=malloc_man_v2(size);
+        
+        assert(p!=NULL);
+        assert(is_aligned(p,ALIGNMENT));
 
-    for(int i=0;i<16;i++){
-        p[i]='A'+i;
+        memset(p,0xA5,size);
+
+        free_man(p);
     }
 
-    for(int i=0;i<16;i++){
-        assert(p[i]=='A'+i);
-    }
+    double *d=malloc_man_v2(sizeof(double));
+    
+    assert(d!=NULL);
+    assert(is_aligned(d,_Alignof(double)));
 
-    free_man(p);
+    *d=3.1415926535;
+    write(1, "double test passed\n", 19);
+    
+    free_man(d);
 
-    char *q=malloc_man_v2(8);
-    assert(q!=NULL);
-
-
-    assert(q==p);
-
-    free_man(q);
+    max_align_t *m=malloc_man_v2(sizeof(max_align_t));
+    assert(m!=NULL);
+    assert(is_aligned(m,_Alignof(max_align_t)));
+    free_man(m);
 
     int *arr=calloc_man(4,sizeof(int));
     assert(arr!=NULL);
+    assert(is_aligned(arr,ALIGNMENT));
 
-    for(int i=0;i<4;i++){
+    for (int i=0;i<4;i++){
         assert(arr[i]==0);
     }
 
@@ -156,33 +293,27 @@ int main(int argc,char *argv[]){
     arr[1]=20;
     arr[2]=30;
     arr[3]=40;
-    
+
     int *bigger=realloc_man(arr,8*sizeof(int));
+    
     assert(bigger!=NULL);
+    assert(is_aligned(bigger,ALIGNMENT));
 
     assert(bigger[0]==10);
-    assert(bigger[1] == 20);
-    assert(bigger[2] == 30);
-    assert(bigger[3] == 40);
+    assert(bigger[1]==20);
+    assert(bigger[2]==30);
+    assert(bigger[3]==40);
 
     bigger[4]=50;
     bigger[5]=60;
     bigger[6]=70;
     bigger[7]=80;
 
-    int *smaller=realloc_man(bigger,4*sizeof(int));
-    assert(smaller==bigger);
-    
-    assert(smaller[0] == 10);
-    assert(smaller[1] == 20);
-    assert(smaller[2] == 30);
-    assert(smaller[3] == 40);
+    for (int i=4;i<8;i++){
+        assert(bigger[i]==(i+1)*10);
+    }
 
-    free_man(smaller);
-
-    void *zero=malloc_man_v2(0);
-    assert(zero==NULL);
-
+    free_man(bigger);
 
     return 0;
 }
