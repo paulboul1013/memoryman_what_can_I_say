@@ -9,7 +9,22 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define ALIGNMENT ((size_t)_Alignof(max_align_t))
+#define ALIGNOF(type) offsetof(struct {char c; type member;}, member)
+
+typedef union max_align_union{
+    char c;
+    short s;
+    int i;
+    long l;
+    long long ll;
+    float f;
+    double d;
+    long double ld;
+    void *p;
+    void (*fp)(void);
+} max_align_union;
+
+#define ALIGNMENT ((size_t)ALIGNOF(max_align_union))
 
 struct block_meta{
     size_t size;
@@ -254,21 +269,47 @@ static int is_aligned(void *ptr,size_t alignment){
 
 int main(int argc,char *argv[]){
 
+    int *arr = calloc_man(4, sizeof(int));
+    assert(arr != NULL);
+    assert(is_aligned(arr, ALIGNMENT));
 
-    void *p=malloc_man_v2(64);
-    assert(p!=NULL);
-    assert(is_aligned(p,ALIGNMENT));
+    for (int i = 0; i < 4; i++) {
+        assert(arr[i] == 0);
+    }
 
-    free_man(p);
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[3] = 40;
 
-    void *q=malloc_man_v2(32);
-    assert(q!=NULL);
-    assert(is_aligned(q,ALIGNMENT));
+    int *bigger = realloc_man(arr, 8 * sizeof(int));
+    assert(bigger != NULL);
+    assert(is_aligned(bigger, ALIGNMENT));
 
+    assert(bigger[0] == 10);
+    assert(bigger[1] == 20);
+    assert(bigger[2] == 30);
+    assert(bigger[3] == 40);
 
-    assert(p==q);
+    bigger[4] = 50;
+    bigger[5] = 60;
+    bigger[6] = 70;
+    bigger[7] = 80;
 
-    free_man(q);
+    for (int i = 4; i < 8; i++) {
+        assert(bigger[i] == (i + 1) * 10);
+    }
+
+    free_man(bigger);
+
+    assert(malloc_man_v2(0) == NULL);
+
+    max_align_union *m = malloc_man_v2(sizeof(max_align_union));
+    assert(m != NULL);
+    assert(is_aligned(m, ALIGNMENT));
+    free_man(m);
+
+    write(1, "allocator tests passed\n", 23);
 
     return 0;
 }
