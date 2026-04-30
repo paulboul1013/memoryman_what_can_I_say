@@ -20,7 +20,7 @@ struct block_meta{
 
 // #define META_SIZE sizeof(struct block_meta)
 
-void *global_base=NULL;
+static struct block_meta *global_base=NULL;
 /*global_base
     |
     v
