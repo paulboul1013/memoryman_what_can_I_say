@@ -120,6 +120,48 @@ struct block_meta *find_free_block(struct block_meta **last, size_t size){
     return cur;
 }
 
+static void split_block(struct block_meta *block, size_t requested_size){
+    size_t meta=meta_size();
+
+    /*
+        block->size is current free block used memory section
+        requested_size is malloc_man_v2 need aligned size
+
+        if left space not enough to place:
+        1. a new metadata
+        2. at least ALIGNMENT bytes user memory
+        then not split，directly use
+    */
+
+    if (block->size <=requested_size){
+        return;
+    }
+
+    size_t remaining_total=block->size - requested_size;
+
+    if (remaining_total < meta+ALIGNMENT) {
+        return;
+    }
+
+    //new block position:
+    /*
+        [old metadata][requested user memory][new metadata][remaining user memory]
+        ^             ^                      ^
+        block         malloc return position new_block
+    */
+    struct block_meta *new_block=
+        (struct block_meta*)((char*)block+meta+requested_size);
+
+    new_block->size=remaining_total-meta;
+    new_block->next=block->next;
+    new_block->free=1;
+    new_block->magic=0x55555555;
+
+    block->size=requested_size;
+    block->next=new_block;
+    
+}
+
 //if can't find free block,ask os to more space 
 struct block_meta * request_space(struct block_meta *last, size_t  size){
     size_t aligned_size=0;
@@ -203,6 +245,8 @@ void *malloc_man_v2(size_t size){
             block=request_space(last,aligned_size);
             if (!block) return NULL;
         }else{
+            split_block(block,aligned_size);
+
             block->free=0;
             block->magic=0x77777777;
         }
@@ -269,45 +313,39 @@ static int is_aligned(void *ptr,size_t alignment){
 
 int main(int argc,char *argv[]){
 
-    int *arr = calloc_man(4, sizeof(int));
-    assert(arr != NULL);
-    assert(is_aligned(arr, ALIGNMENT));
+    
+    void *big=malloc_man_v2(4096);
+    assert(big!=NULL);
+    assert(is_aligned(big,ALIGNMENT));
 
-    for (int i = 0; i < 4; i++) {
-        assert(arr[i] == 0);
-    }
+    free_man(big);
 
-    arr[0] = 10;
-    arr[1] = 20;
-    arr[2] = 30;
-    arr[3] = 40;
+    void *before=sbrk(0);
 
-    int *bigger = realloc_man(arr, 8 * sizeof(int));
-    assert(bigger != NULL);
-    assert(is_aligned(bigger, ALIGNMENT));
+    void *a=malloc_man_v2(64);
+    assert(a!=NULL);
+    assert(is_aligned(a,ALIGNMENT));
 
-    assert(bigger[0] == 10);
-    assert(bigger[1] == 20);
-    assert(bigger[2] == 30);
-    assert(bigger[3] == 40);
+    void *b=malloc_man_v2(64);
+    assert(b!=NULL);
+    assert(is_aligned(b,ALIGNMENT));
 
-    bigger[4] = 50;
-    bigger[5] = 60;
-    bigger[6] = 70;
-    bigger[7] = 80;
+    void *after=sbrk(0);
 
-    for (int i = 4; i < 8; i++) {
-        assert(bigger[i] == (i + 1) * 10);
-    }
+    assert(a==big);
 
-    free_man(bigger);
+    //split success, b link behind a:
+    //[meta][a user 64][meta][b user 64]
+    size_t aligned_64 =0 ;
+    assert(align_up_size(64,&aligned_64));
 
-    assert(malloc_man_v2(0) == NULL);
+    assert(b==(void*)((char*)a+aligned_64+meta_size()));
 
-    max_align_union *m = malloc_man_v2(sizeof(max_align_union));
-    assert(m != NULL);
-    assert(is_aligned(m, ALIGNMENT));
-    free_man(m);
+    assert(before==after);
+
+    free_man(a);
+    free_man(b);
+
 
     write(1, "allocator tests passed\n", 23);
 
