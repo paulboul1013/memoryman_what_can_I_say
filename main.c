@@ -165,7 +165,7 @@ struct block_meta * request_space(struct block_meta *last, size_t  size){
 }
 
 void *malloc_man_v2(size_t size){
-    if (size<=0) return NULL;
+    if (size==0) return NULL;
 
     size_t aligned_size=0;
     if (!align_up_size(size,&aligned_size)){
