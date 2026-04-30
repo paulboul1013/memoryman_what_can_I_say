@@ -220,14 +220,13 @@ void *realloc_man(void *ptr,size_t size){
     }
     
     struct block_meta *block=get_block_ptr(ptr);
-
-    if (block->size>=size) return ptr;
     
     void *new=malloc_man_v2(size);
 
     if (!new) return NULL;
 
-    memcpy(new,ptr,block->size);
+    size_t copy_size=block->size < size ? block->size : size;
+    memcpy(new,ptr,copy_size);
 
     free_man(ptr);
     return new;
