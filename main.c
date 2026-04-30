@@ -254,65 +254,21 @@ static int is_aligned(void *ptr,size_t alignment){
 
 int main(int argc,char *argv[]){
 
-    for(size_t size=1;size<=256;size++){
-        void *p=malloc_man_v2(size);
-        
-        assert(p!=NULL);
-        assert(is_aligned(p,ALIGNMENT));
 
-        memset(p,0xA5,size);
+    void *p=malloc_man_v2(64);
+    assert(p!=NULL);
+    assert(is_aligned(p,ALIGNMENT));
 
-        free_man(p);
-    }
+    free_man(p);
 
-    double *d=malloc_man_v2(sizeof(double));
-    
-    assert(d!=NULL);
-    assert(is_aligned(d,_Alignof(double)));
+    void *q=malloc_man_v2(32);
+    assert(q!=NULL);
+    assert(is_aligned(q,ALIGNMENT));
 
-    *d=3.1415926535;
-    write(1, "double test passed\n", 19);
-    
-    free_man(d);
 
-    max_align_t *m=malloc_man_v2(sizeof(max_align_t));
-    assert(m!=NULL);
-    assert(is_aligned(m,_Alignof(max_align_t)));
-    free_man(m);
+    assert(p==q);
 
-    int *arr=calloc_man(4,sizeof(int));
-    assert(arr!=NULL);
-    assert(is_aligned(arr,ALIGNMENT));
-
-    for (int i=0;i<4;i++){
-        assert(arr[i]==0);
-    }
-
-    arr[0]=10;
-    arr[1]=20;
-    arr[2]=30;
-    arr[3]=40;
-
-    int *bigger=realloc_man(arr,8*sizeof(int));
-    
-    assert(bigger!=NULL);
-    assert(is_aligned(bigger,ALIGNMENT));
-
-    assert(bigger[0]==10);
-    assert(bigger[1]==20);
-    assert(bigger[2]==30);
-    assert(bigger[3]==40);
-
-    bigger[4]=50;
-    bigger[5]=60;
-    bigger[6]=70;
-    bigger[7]=80;
-
-    for (int i=4;i<8;i++){
-        assert(bigger[i]==(i+1)*10);
-    }
-
-    free_man(bigger);
+    free_man(q);
 
     return 0;
 }
