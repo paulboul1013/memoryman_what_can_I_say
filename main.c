@@ -156,7 +156,7 @@ struct block_meta * request_space(struct block_meta *last, size_t  size){
     }
 
     
-    block->size=size;
+    block->size=aligned_size;
     block->next=NULL;
     block->free=0;
     block->magic=0x12345678;
@@ -185,7 +185,7 @@ void *malloc_man_v2(size_t size){
         block=find_free_block(&last,aligned_size);
 
         if (!block){
-            block=request_space(last,size);
+            block=request_space(last,aligned_size);
             if (!block) return NULL;
         }else{
             block->free=0;
